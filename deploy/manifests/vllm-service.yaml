@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kimi-k25-service
+  namespace: kimi-k25
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  selector:
+    app: kimi-k25-vllm
+  ports:
+  - protocol: TCP
+    port: 30001
+    targetPort: 30001
+  type: LoadBalancer

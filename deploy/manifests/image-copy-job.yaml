@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: copy-vllm-image
+  namespace: kimi-k25
+spec:
+  template:
+    spec:
+      serviceAccountName: kimi-ksa
+      restartPolicy: OnFailure
+      containers:
+      - name: crane
+        image: google/cloud-sdk:slim
+        command:
+        - "/bin/bash"
+        - "-c"
+        - |
+          echo "Installing crane..."
+          curl -L https://github.com/google/go-containerregistry/releases/download/v0.19.1/go-containerregistry_Linux_x86_64.tar.gz | tar -zxf - crane
+          chmod +x crane
+          
+          echo "Fetching GCP access token..."
+          TOKEN=$(gcloud auth print-access-token)
+          
+          echo "Logging into Artifact Registry..."
+          echo "$TOKEN" | ./crane auth login us-central1-docker.pkg.dev -u oauth2accesstoken --password-stdin
+          
+          echo "Copying vLLM image from Docker Hub to Artifact Registry..."
+          ./crane copy docker.io/vllm/vllm-openai:latest us-central1-docker.pkg.dev/gpu-launchpad-playground/kimi-repo/vllm-openai:latest
+          echo "Image copied successfully!"

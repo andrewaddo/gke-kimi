@@ -1,62 +1,64 @@
-# Optimizing Kimi K2.5 Inference on GKE with RTX 6000 Ada
+# Optimizing Kimi K2.5 Inference on GKE with G4 (Blackwell)
 
 ## Overview
-This document outlines the strategy for deploying and optimizing the inference of the Kimi K2.5 (1-trillion parameter MoE) model on Google Kubernetes Engine (GKE) utilizing NVIDIA RTX 6000 Ada Generation (48GB) GPUs.
+This document outlines the strategy for deploying and optimizing the inference of the Kimi K2.5 (1-trillion parameter MoE) model on Google Kubernetes Engine (GKE) utilizing **NVIDIA G4 machine types**.
 
-## The Challenge
-Kimi K2.5 is a massive Mixture-of-Experts (MoE) model. Even with INT4 quantization, the model requires approximately **600GB of memory**.
-The NVIDIA RTX 6000 Ada has **48GB of VRAM** and relies on PCIe for inter-GPU communication (lacking high-bandwidth NVLink found in data center GPUs like H100). This presents a significant bottleneck for standard Tensor Parallelism across many cards.
+## Hardware Architecture: NVIDIA Blackwell (G4)
+Contrary to previous workstation-class RTX cards, the **GCP G4 series** features the **NVIDIA RTX PRO 6000 Blackwell Server Edition**. This hardware represents a generational leap in inference efficiency.
 
-## Selected Optimization Strategy: "The Coding Cache" Architecture`
+### Key Hardware Advantages:
+*   **Architecture:** 5th Generation Tensor Cores (Blackwell).
+*   **VRAM:** **96GB GDDR7** per GPU.
+*   **Native NVFP4:** Native hardware acceleration for the 4-bit Floating Point (FP4) format.
+*   **Aggregate Memory:** A single 8-GPU node provides **768GB of VRAM**, sufficient to host the entire 1T Kimi K2.5 model (quantized) without inter-node communication.
 
-For a coding-centric workload (where large context prefixes like codebases and documentation are frequently reused), we select a hybrid approach maximizing VRAM caching and GKE's intelligent routing.
+## Selected Optimization Strategy: "Blackwell-Native" Architecture
 
-### 1. Hardware Configuration
-*   **GPU:** NVIDIA RTX 6000 Ada Generation (48GB VRAM).
-*   **Scale:** 14x to 16x RTX 6000 Ada GPUs per Engine Group (distributed across nodes as needed by GKE availability, prioritizing compact placement).
-*   **Quantization:** **INT4 (AWQ/GPTQ)**. This shrinks the model footprint to ~550GB-600GB, allowing it to reside entirely within the aggregated VRAM of the 14-16 GPUs.
+For Kimi K2.5, we leverage the native low-precision capabilities of Blackwell to maximize throughput and minimize latency by deploying the official NVIDIA-optimized weights.
 
-### 2. Software & Framework Optimizations (vLLM)
-*   **Parallelism Strategy:** **Pipeline Parallelism (PP)** combined with **Expert Parallelism (EP)**.
-    *   *Why:* RTX 6000s lack NVLink. High Tensor Parallelism (TP) over PCIe will cripple performance. PP passes activations sequentially between GPUs, drastically reducing PCIe congestion. EP ensures specific MoE experts reside on specific GPUs.
-*   **KV Cache:** `--kv-cache-dtype fp8`. The Ada architecture has native 4th-gen Tensor Cores optimized for FP8. This halves the memory required for conversation history, massively increasing concurrent batch size capability.
-*   **Speculative Decoding:** Deploy an EAGLE-3 (or similar 1B-3B parameter) draft model alongside K2.5 to increase tokens-per-second (TPS) by 2x-3x.
+### 1. Model Selection: `nvidia/Kimi-K2.5-NVFP4`
+*   **Strategy:** Utilize the pre-quantized **`nvidia/Kimi-K2.5-NVFP4`** model directly from Hugging Face.
+*   **Benefit:** This model is officially optimized by NVIDIA using the TensorRT Model Optimizer specifically for the Blackwell architecture. NVFP4 uses a two-level micro-scaling strategy that captures the dynamic range of Kimi's 1-trillion parameters far more accurately than INT4, preserving more of the model's reasoning and coding capability while minimizing the footprint.
+*   **Throughput:** Native FP4 execution on 5th Gen Tensor Cores provides up to 2x the throughput of FP8/INT4.
+
+### 2. Deployment Topology: Single-Node (TP=8)
+*   **Strategy:** Deploy the entire model on a single `g4-standard-384` instance (8x 96GB GPUs).
+*   **Why:** With 768GB of aggregate VRAM, we no longer need Pipeline Parallelism (PP) across nodes or complex orchestration like Ray. We use **Tensor Parallelism (TP=8)** within the node, leveraging the ultra-high bandwidth Titanium offload engine for intra-node communication. This eliminates the multi-node PCIe latency bottleneck.
 
 ### 3. GKE-Native Optimizations (The Core Advantage)
 *   **GKE Inference Gateway (Prefix-Aware Routing):** This is the critical component for coding workloads.
     *   *Mechanism:* The Gateway hashes the prefix of incoming prompts (e.g., a large injected codebase). It routes requests with identical prefixes to the exact same GPU pod that previously processed it.
     *   *Impact:* Leverages vLLM's Automatic Prefix Caching. The model skips the expensive "Prefill" phase entirely for reused context, resulting in near-instant Time-To-First-Token (TTFT) and drastically reduced compute load. The 48GB VRAM per card acts as a massive cache drive for code context.
 *   **Model-Aware Autoscaling (llm-d / HPA):** Scale based on inference metrics (Request Concurrency or Duty Cycle) exported by vLLM, rather than raw GPU utilization (which is an inaccurate metric for LLMs).
-*   **GCSFuse for Fast Boot:** Mount the 600GB model weights directly from Google Cloud Storage via the GCSFuse sidecar. This reduces pod startup time from 30+ minutes to seconds, enabling elastic scaling.
+*   **GCSFuse for Fast Model Loading:** Mount the 600GB model weights directly from Google Cloud Storage via the GCSFuse sidecar. This avoids copying hundreds of gigabytes of weights to the local pod disk, reducing pod startup time from 30+ minutes to seconds, and enabling rapid elastic scaling.
+*   **GKE Image Streaming:** Enabled at the cluster level to dynamically pull container images (like the multi-gigabyte vLLM image) from Artifact Registry. The pod boots immediately, and container image data is streamed on-demand, further drastically reducing node provisioning and pod boot latency.
+*   **Automated Weight Preparation (GKE Job):** Rather than manually copying weights, a dedicated Kubernetes Job (`model-download-job.yaml`) natively utilizes the GCSFuse mount to download the models from HuggingFace directly into the secure, centralized GCS bucket, creating a fully automated deployment pipeline.
+
+## Scaling Strategy: Achieving 1.5M Tokens Per Minute (TPM)
+
+To support a high-demand enterprise environment requiring 1.5 million TPM (25,000 TPS), the cluster must scale horizontally while maintaining cache affinity.
+
+### 1. Hardware Requirements
+*   **Total Throughput Target:** 25,000 TPS.
+*   **Optimized Configuration (Prefix Hits):** 3 nodes (24x RTX PRO 6000 Blackwell).
+*   **Baseline Configuration (Cold Starts):** 7 nodes (56x RTX PRO 6000 Blackwell).
+*   **Recommended Starting Point:** **4 nodes** (32 GPUs) with Prefix-Aware Routing enabled.
+
+### 2. Automated Scaling (HPA)
+Use the GKE Horizontal Pod Autoscaler with custom vLLM metrics.
+*   **Metric:** `vllm_avg_generation_throughput_10s` or `vllm_num_requests_running`.
+*   **Threshold:** Trigger scale-up when a node reaches 80% of its tested Scenario A capacity (~6,800 TPS).
+
+### 3. Capacity Tiering
+*   **Primary Tier (Spot G4):** Use Spot instances for the bulk of the 25k TPS capacity to reduce costs by 60-90%.
+*   **Safety Tier (On-Demand G4):** Maintain a minimum of 1 node on-demand to ensure baseline availability for critical tasks during GCE preemption events.
 
 ---
 
-## Alternative Options Considered (And Why They Were Rejected)
+## Technical Correction (Historical Archive)
+*   **Previous Assumption:** It was previously stated that G4 used Ada Lovelace architecture and rejected NVFP4. We originally planned a complex multi-node INT4 deployment.
+*   **Correction:** Official GCP documentation confirms G4 uses **Blackwell Server Edition**. Consequently, NVFP4 is **fully supported**. Shifting to the `nvidia/Kimi-K2.5-NVFP4` model allows us to consolidate the entire 1T parameter MoE onto a single, highly efficient 8-GPU node.
 
-### Alternative 1: NVIDIA Blackwell NVFP4 Quantization
-*   **Description:** Utilizing the new 4-bit Floating Point (FP4) format designed for extreme throughput.
-*   **Why Rejected:** **Hardware Incompatibility.** NVFP4 requires 5th Generation Tensor Cores found *only* in the Blackwell (B100/B200) architecture. The RTX 6000 Ada (Ada Lovelace architecture) has 4th Gen Tensor Cores and physically cannot process FP4 math natively.
-
-### Alternative 2: Extreme Quantization (ExLlamaV2 at 2.5bpw)
-*   **Description:** Quantizing the model further to 2.5 bits-per-weight to fit the entire model into 8x RTX 6000s (a single server node).
-*   **Why Rejected:** **Quality Degradation.** While it reduces hardware requirements significantly and offers high throughput, coding tasks require high precision and complex reasoning. Compressing a 1T model to 2.5bpw risks unacceptable degradation in coding accuracy and logical coherence compared to INT4.
-
-### Alternative 3: CPU-GPU Offloading (KTransformers)
-*   **Description:** Using 2x-4x RTX 6000s and offloading the MoE "expert" layers to massive, high-speed System RAM (DDR5) via PCIe.
-*   **Why Rejected:** **Throughput Limits.** While highly cost-effective for a single user or hobbyist setup, the constant swapping of expert weights across the PCIe bus limits throughput to ~10-14 tokens/sec. This is insufficient for a multi-user enterprise environment where high concurrency is required.
-
-## Conclusion
-By combining the 48GB VRAM capacity of the RTX 6000 Ada with GKE Inference Gateway's Prefix-Aware Routing and INT4 quantization, we create an environment perfectly tuned for coding tasks. This strategy minimizes the PCIe bottleneck inherent to RTX workstation cards and maximizes throughput by ensuring large, repetitive code contexts are cached and routed intelligently.
-
-## Hardware Validation Appendix
-
-The strategies and rejections outlined in this document have been validated against official NVIDIA hardware specifications and current Google Cloud Platform (GCP) capabilities.
-
-### 1. GCP Availability Validation
-*   **Validated Fact:** The `nvidia-rtx-pro-6000` (NVIDIA RTX 6000 Ada Generation) is available as a native accelerator type on Google Cloud Compute Engine in multiple regions (e.g., `us-central1`, `europe-west1`, `us-west1`).
-*   **GKE Support:** These accelerators can be attached to GKE Standard node pools running versions 1.34+ and 1.35+, which fully support the `InferencePool` and `HTTPRoute` resources required for the Inference Gateway.
-
-### 2. NVFP4 and Architecture Validation
-*   **Validated Fact:** The RTX 6000 Ada is built on the **Ada Lovelace** architecture and utilizes **4th Generation Tensor Cores**.
-*   **NVFP4 Hardware Dependency:** **NVFP4** (NVIDIA 4-bit Floating Point) is a specialized format introduced with the **Blackwell** architecture. Native hardware acceleration for NVFP4 strictly requires **5th Generation Tensor Cores** (found in B100, B200, and Blackwell Ultra).
-*   **Impact on Strategy:** While custom software kernels (e.g., AdaLLM) can emulate NVFP4 on Ada hardware to save VRAM, this emulation bypasses the hardware Tensor Cores. This results in a net *loss* of throughput compared to native INT4 or FP8 execution. Therefore, NVFP4 was correctly rejected for high-throughput enterprise inference on the RTX 6000 Ada platform.
+## Appendix: Implementation Details
+*   **Quantization:** Use `vLLM` which natively supports NVFP4 on Blackwell hardware.
+*   **KV Cache:** Use `fp8` for KV cache to maximize context window length (up to 256k tokens) on the 96GB cards.

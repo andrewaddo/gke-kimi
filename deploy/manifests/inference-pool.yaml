@@ -1,0 +1,19 @@
+apiVersion: ai.gke.io/v1
+kind: InferencePool
+metadata:
+  name: kimi-pool
+  namespace: kimi-k25
+spec:
+  selector:
+    matchLabels:
+      app: kimi-k25-vllm
+  model:
+    name: kimi-k2.5
+    version: v1
+  objective:
+    throughput: 100
+    latency: 100ms
+  strategy:
+    type: prefix-aware
+    config:
+      prefixMatchLength: 1024

@@ -1,0 +1,80 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: download-kimi-model
+  namespace: kimi-k25
+spec:
+  template:
+    metadata:
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      serviceAccountName: kimi-ksa
+      restartPolicy: Never
+      containers:
+      - name: download-draft
+        image: huggingface/downloader:0.17.3
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token-secret
+              key: HF_TOKEN
+        - name: HF_HOME
+          value: "/models/.cache"
+        command: ["huggingface-cli"]
+        args:
+        - "download"
+        - "--local-dir"
+        - "/models/draft-speculative"
+        - "--local-dir-use-symlinks"
+        - "False"
+        - "Qwen/Qwen2.5-0.5B" 
+        resources:
+          requests:
+            cpu: 1
+            memory: "2Gi"
+            ephemeral-storage: "2Gi"
+        volumeMounts:
+        - name: model-weights
+          mountPath: /models
+      - name: download-kimi
+        image: huggingface/downloader:0.17.3
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token-secret
+              key: HF_TOKEN
+        - name: HF_HOME
+          value: "/models/.cache"
+        command: ["huggingface-cli"]
+        args:
+        - "download"
+        - "--local-dir"
+        - "/models/Kimi-K2.5-NVFP4"
+        - "--local-dir-use-symlinks"
+        - "False"
+        - "nvidia/Kimi-K2.5-NVFP4"
+        resources:
+          requests:
+            cpu: 2
+            memory: "8Gi"
+            ephemeral-storage: "2Gi"
+        volumeMounts:
+        - name: model-weights
+          mountPath: /models
+      volumes:
+      - name: model-weights
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: kimi-k25-weights-bucket-gpu-launchpad-playground
+            mountOptions: "implicit-dirs"
+      nodeSelector:
+        cloud.google.com/gke-nodepool: rtx-6000-pool
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Equal"
+        value: "present"
+        effect: "NoSchedule"
