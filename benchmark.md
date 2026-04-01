@@ -109,6 +109,13 @@ This scenario demonstrates the power of Prefix Caching in a simulated developer 
 
 The single `g4-standard-384` node established a raw hardware limit of **~4,065 tokens per second** (Scenario B). However, when properly utilizing Prefix Caching (Scenario A), the node peaked at **~7,818 tokens per second**, representing approximately **469,000 Tokens Per Minute (TPM)** per node.
 
+### Cluster Elasticity & Loading Metrics
+To evaluate the true production viability of this architecture, the lifecycle of the 4-node cluster was monitored. Because 1-Trillion parameter MoE models are massive (~600GB), deployment times are critical.
+
+*   **Node Provisioning (0 to 4 Nodes):** ~5 minutes. GKE Image Streaming bypassed the 10GB container pull.
+*   **Model Loading (GCS to VRAM):** **~8m 52s** (1.1 GB/s sustained). Achieved via GCSFuse parallel downloads and 1000GB local node caching.
+*   **Total Cold Start:** ~14 minutes from 0 nodes to serving 1.5M TPM.
+
 ### Scaling to 1.5 Million TPM
 To achieve the target of 1.5M TPM (25,000 TPS), the architecture must scale horizontally while maintaining the high prefix cache hit rate demonstrated in Scenario A.
 
