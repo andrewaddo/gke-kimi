@@ -79,7 +79,7 @@ This deployment is heavily tuned to extract maximum tokens-per-second (TPS) from
 *   `VLLM_ATTENTION_BACKEND="FLASHINFER"`: Forces vLLM to use FlashInfer, which provides highly optimized attention kernels specifically tuned for modern NVIDIA architectures.
 
 ### B. vLLM Server Arguments (`api_server.py`)
-*   `--model /models/Kimi-K2.5-NVFP4`: The path to the NVIDIA-optimized NVFP4 weights.
+*   `--model /models`: The path to the NVIDIA-optimized NVFP4 weights.
 *   `--tensor-parallel-size 8`: Distributes the model tensors across all 8 GPUs on the single node. We **do not** use Pipeline Parallelism (PP) here because the 768GB aggregate VRAM is sufficient to hold the entire model on one node, avoiding slow PCIe inter-node latency.
 *   `--enable-expert-parallel`: **Crucial for MoE.** Instead of slicing every tensor across all GPUs (Tensor Parallelism), EP places entire "experts" on specific GPUs. This drastically reduces the inter-GPU communication overhead over the PCIe bus.
 *   `--compilation_config.pass_config.fuse_allreduce_rms true`: A performance optimization that fuses the AllReduce communication step with the subsequent RMSNorm operation into a single GPU kernel, significantly reducing memory bandwidth pressure.
@@ -161,7 +161,7 @@ curl -X POST http://localhost:30001/reset_prefix_cache
 # Run the benchmark from inside the pod to bypass network jitter
 kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
   vllm bench serve \
-    --model "/models/Kimi-K2.5-NVFP4" \
+    --model "/models" \
     --dataset-name "prefix_repetition" \
     --prefix-repetition-prefix-len 10000 \
     --prefix-repetition-num-prefixes 40 \
@@ -180,7 +180,7 @@ This second pass demonstrates the power of Prefix Caching in a simulated develop
 # DO NOT clear the cache. Run the benchmark again immediately.
 kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
   vllm bench serve \
-    --model "/models/Kimi-K2.5-NVFP4" \
+    --model "/models" \
     --dataset-name "prefix_repetition" \
     --prefix-repetition-prefix-len 10000 \
     --prefix-repetition-num-prefixes 40 \
@@ -201,7 +201,7 @@ curl -X POST http://localhost:30001/reset_prefix_cache
 # Run benchmark with random inputs
 kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
   vllm bench serve \
-    --model "/models/Kimi-K2.5-NVFP4" \
+    --model "/models" \
     --dataset-name "random" \
     --random-input-len 10000 \
     --random-output-len 300 \
@@ -210,6 +210,24 @@ kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
     --port 30001 \
     --trust-remote-code \
     --endpoint /v1/completions
+```
+
+### 4-Node Cluster Benchmark (1.5M TPM Simulation)
+To benchmark the entire 4-node cluster (32 GPUs total), target the service endpoint so traffic is distributed across all replicas. Note the increased request rate and prompt count to saturate the cluster.
+
+```bash
+kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
+  vllm bench serve \
+    --model "/models" \
+    --base-url "http://kimi-k25-service:30001/v1" \
+    --dataset-name "prefix_repetition" \
+    --prefix-repetition-prefix-len 10000 \
+    --prefix-repetition-num-prefixes 40 \
+    --prefix-repetition-output-len 300 \
+    --request-rate 20.0 \
+    --num-prompts 300 \
+    --trust-remote-code \
+    --endpoint /completions
 ```
 
 

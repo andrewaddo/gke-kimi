@@ -75,6 +75,22 @@ Two distinct scenarios were executed to demonstrate both the raw hardware limit 
 ### 4-Node Cluster Validation (1.5M TPM Simulation)
 To validate the enterprise scaling requirement, a high-concurrency benchmark was executed across the 4-node Blackwell farm (32 GPUs). 
 
+**Command Executed:**
+```bash
+kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
+  vllm bench serve \
+    --model "/models" \
+    --base-url "http://kimi-k25-service:30001/v1" \
+    --dataset-name "prefix_repetition" \
+    --prefix-repetition-prefix-len 10000 \
+    --prefix-repetition-num-prefixes 40 \
+    --prefix-repetition-output-len 300 \
+    --request-rate 20.0 \
+    --num-prompts 300 \
+    --trust-remote-code \
+    --endpoint /completions
+```
+
 **Outcome:** The cluster successfully delivered over **25,800 TPS**, confirming that a 4-node `g4-standard-384` configuration meets the 1.5M TPM target when utilizing Prefix Caching.
 
 *   **Configuration:** 1x On-Demand Node + 3x Spot Nodes.
