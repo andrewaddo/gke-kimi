@@ -91,9 +91,10 @@ This deployment is heavily tuned to extract maximum tokens-per-second (TPS) from
 
 ### C. GCSFuse Optimizations (Volume Mounts)
 To load the 600GB model quickly, we apply advanced GCSFuse volume attributes:
-*   `implicit-dirs`: Allows GCSFuse to traverse the bucket structure without requiring explicit directory objects.
-*   `sequential-read-size-mb=200`: Tells GCSFuse that vLLM will be reading the `.safetensors` files sequentially, instructing it to pre-fetch large 200MB chunks into memory, massively accelerating pod startup times.
-*   `file-cache:max-size-mb:-1` & `file-cache:enable-parallel-downloads:true`: Leverages the node's 1000GB boot disk to cache the model files locally using parallel streaming.
+*   `metadata-cache:ttl-secs:-1`: Indefinitely caches model file metadata, reducing latency for file system lookups.
+*   `file-cache:max-size-mb:-1`: Uses the node's local disk as a full cache for model weights, bypassing the network for subsequent pod restarts.
+*   `file-cache:enable-parallel-downloads:true`: **Crucial.** Enables GCSFuse to stream model shards via multiple parallel threads, reducing 1T model load times from hours to minutes.
+*   `file-cache:cache-file-for-range-read:true`: Optimizes the multi-head read pattern of the vLLM loader.
 
 ---
 

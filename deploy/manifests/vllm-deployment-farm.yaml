@@ -46,6 +46,8 @@ spec:
           value: "FLASHINFER"
         - name: VLLM_SERVER_DEV_MODE
           value: "1"
+        - name: VLLM_USE_V1
+          value: "0"
         - name: NCCL_DEBUG
           value: "INFO"
         command: ["/bin/bash", "-c"]
@@ -60,6 +62,7 @@ spec:
             --mm-encoder-tp-mode data \
             --gpu-memory-utilization 0.95 \
             --max-model-len 65536 \
+            --kv-cache-dtype fp8 \
             --enable-prefix-caching \
             --trust-remote-code \
             --port 30001 \
