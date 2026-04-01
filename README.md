@@ -42,16 +42,35 @@ kubectl logs -f job/download-kimi-model -n kimi-k25 -c download-kimi
 ```
 *Wait for this Job to reach `Completed` status before proceeding.*
 
-### 3. Deploy vLLM
-Once the weights are securely stored in the GCS bucket, deploy the Blackwell-optimized vLLM server:
+### 3. Deploy vLLM (Choose Scenario)
+
+We provide two deployment configurations depending on your testing needs:
+
+#### Option A: Single Node (Baseline & Scenario Testing)
+Deploys 1 replica of the vLLM server to establish baseline hardware performance.
 ```bash
-kubectl apply -f deploy/manifests/vllm-deployment.yaml
+kubectl apply -f deploy/manifests/vllm-deployment-single.yaml
 kubectl apply -f deploy/manifests/vllm-service.yaml
+```
+
+#### Option B: 4-Node Farm (1.5M TPM Simulation)
+Deploys 4 replicas across the cluster (combining On-Demand and Spot instances) using `podAntiAffinity` to ensure each 1T model replica gets its own dedicated 8-GPU node.
+```bash
+# Make sure your node pools are scaled up (e.g., Spot pool max-nodes: 4)
+kubectl apply -f deploy/manifests/vllm-deployment-farm.yaml
+kubectl apply -f deploy/manifests/vllm-service.yaml
+```
+
+#### Switching Between Scenarios
+If you have one scenario running and want to switch to the other, delete the active deployment first to free up the GPUs, then apply the new one:
+```bash
+kubectl delete deployment kimi-k25-vllm -n kimi-k25
+kubectl apply -f deploy/manifests/vllm-deployment-<single|farm>.yaml
 ```
 
 ---
 
-## Configuration Reference: The vLLM Deployment (`vllm-deployment.yaml`)
+## Configuration Reference: The vLLM Deployments
 
 This deployment is heavily tuned to extract maximum tokens-per-second (TPS) from the Blackwell architecture for a 1-Trillion parameter MoE.
 
@@ -96,6 +115,29 @@ To scale efficiently to 3 nodes, you **must** utilize the GKE Inference Gateway 
 Use the GKE Horizontal Pod Autoscaler configured with custom vLLM metrics.
 *   **Metric:** Scale based on `vllm_num_requests_running` or `vllm_gpu_cache_usage_perc` rather than raw CPU/GPU utilization (which are inaccurate for LLMs).
 *   **Threshold:** Trigger scale-up when a node reaches 80% of its tested Cache-Optimized capacity.
+
+---
+
+## Manual Testing (API)
+
+To test the model manually from your local machine using the OpenAI-compatible API:
+
+### 1. Establish a Secure Tunnel
+```bash
+kubectl port-forward svc/kimi-k25-service -n kimi-k25 30001:30001
+```
+
+### 2. Send a Test Request (New Terminal)
+```bash
+curl -X POST http://localhost:30001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/models",
+    "messages": [
+      {"role": "user", "content": "Write a Python function to compute the Fibonacci sequence."}
+    ]
+  }'
+```
 
 ---
 
@@ -167,4 +209,42 @@ kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
     --port 30001 \
     --trust-remote-code \
     --endpoint /v1/completions
+```
+
+
+---
+
+## Cost Management & Cleanup
+
+Blackwell 8-GPU nodes are expensive resources. Follow these steps to manage your costs during idle periods and tear down the infrastructure completely.
+
+### 1. Scale Down to 0 (Suspend State)
+To keep your GCS bucket, Artifact Registry, and cluster settings intact but stop paying for the expensive GPUs, run:
+
+```bash
+# Scale On-Demand pool to 0
+gcloud container clusters resize kimi-k25-cluster --node-pool rtx-6000-pool --num-nodes 0 --zone us-central1-b --quiet
+
+# Scale Deployment to 0 so the Autoscaler can terminate Spot nodes
+kubectl scale deployment kimi-k25-vllm -n kimi-k25 --replicas=0
+```
+*Note: Any Spot nodes (`rtx-6000-spot-pool`) with Autoscaling enabled will automatically spin down to 0 after ~10 minutes of having no pods scheduled to them.*
+
+### 2. Complete Teardown (Delete Everything)
+To completely destroy the cluster, the node pools, and all associated storage:
+
+```bash
+PROJECT_ID=$(gcloud config get-value project)
+
+# 1. Delete the GKE Cluster
+gcloud container clusters delete kimi-k25-cluster --zone us-central1-b --quiet
+
+# 2. Delete the GCS Bucket containing the 600GB NVFP4 Model
+gcloud storage rm --recursive gs://kimi-k25-weights-bucket-$PROJECT_ID
+
+# 3. Delete the Artifact Registry repository
+gcloud artifacts repositories delete kimi-repo --location us-central1 --quiet
+
+# 4. Remove the Service Account
+gcloud iam service-accounts delete kimi-gcsfuse-sa@$PROJECT_ID.iam.gserviceaccount.com --quiet
 ```

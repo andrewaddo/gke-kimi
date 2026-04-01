@@ -4,7 +4,7 @@ metadata:
   name: kimi-k25-vllm
   namespace: kimi-k25
 spec:
-  replicas: 1
+  replicas: 4
   selector:
     matchLabels:
       app: kimi-k25-vllm
@@ -20,6 +20,22 @@ spec:
     spec:
       serviceAccountName: kimi-ksa
       terminationGracePeriodSeconds: 30
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-nodepool
+                operator: In
+                values:
+                - rtx-6000-pool
+                - rtx-6000-spot-pool
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: kimi-k25-vllm
+            topologyKey: "kubernetes.io/hostname"
       containers:
       - name: vllm-server
         image: us-central1-docker.pkg.dev/gpu-launchpad-playground/kimi-repo/vllm-openai:latest
@@ -35,7 +51,7 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
-          echo "Starting vLLM Server on Single G4 Node (Blackwell-Native NVFP4)..."
+          echo "Starting vLLM Server on G4 Blackwell Farm (NVFP4)..."
           python3 -m vllm.entrypoints.openai.api_server \
             --model /models \
             --tensor-parallel-size 8 \
@@ -67,15 +83,12 @@ spec:
           driver: gcsfuse.csi.storage.gke.io
           volumeAttributes:
             bucketName: kimi-k25-weights-bucket-gpu-launchpad-playground
-            # Standard options, removed only-dir to reduce path complexity
             mountOptions: "metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,metadata-cache:negative-ttl-secs:0,file-cache:max-size-mb:-1,file-cache:cache-file-for-range-read:true,file-cache:enable-parallel-downloads:true,implicit-dirs,only-dir:Kimi-K2.5-NVFP4/"
             skipCSIBucketAccessCheck: "true"
       - name: shm
         emptyDir:
           medium: Memory
           sizeLimit: 10Gi
-      nodeSelector:
-        cloud.google.com/gke-nodepool: rtx-6000-pool
       tolerations:
       - key: "nvidia.com/gpu"
         operator: "Equal"
