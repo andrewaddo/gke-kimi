@@ -170,7 +170,12 @@ kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
     --num-prompts 100 \
     --port 30001 \
     --trust-remote-code \
-    --endpoint /v1/completions
+    --endpoint /v1/completions \
+    --temperature 0
+
+### Notes on Benchmarking Warnings
+*   **"Using a slow tokenizer"**: This warning is **expected** for Kimi-K2.5. The model uses a custom `tiktoken` implementation which is Python-based. Our testing confirms this does **not** bottleneck throughput on Blackwell hardware. Do **not** attempt to use `--tokenizer-mode fast` or a different model's tokenizer, as this will cause a vocabulary mismatch and significantly degrade performance.
+*   **"temperature==0 (greedy)"**: We explicitly add `--temperature 0` to our commands to ensure deterministic results and suppress this warning.
 ```
 
 ### Run 2 (Warm Cache): Cache Optimized
@@ -189,7 +194,12 @@ kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
     --num-prompts 100 \
     --port 30001 \
     --trust-remote-code \
-    --endpoint /v1/completions
+    --endpoint /v1/completions \
+    --temperature 0
+
+### Notes on Benchmarking Warnings
+*   **"Using a slow tokenizer"**: This warning is **expected** for Kimi-K2.5. The model uses a custom `tiktoken` implementation which is Python-based. Our testing confirms this does **not** bottleneck throughput on Blackwell hardware. Do **not** attempt to use `--tokenizer-mode fast` or a different model's tokenizer, as this will cause a vocabulary mismatch and significantly degrade performance.
+*   **"temperature==0 (greedy)"**: We explicitly add `--temperature 0` to our commands to ensure deterministic results and suppress this warning.
 ```
 
 ### Run Scenario B: Cold Start (Random Inputs)
@@ -209,7 +219,12 @@ kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
     --num-prompts 100 \
     --port 30001 \
     --trust-remote-code \
-    --endpoint /v1/completions
+    --endpoint /v1/completions \
+    --temperature 0
+
+### Notes on Benchmarking Warnings
+*   **"Using a slow tokenizer"**: This warning is **expected** for Kimi-K2.5. The model uses a custom `tiktoken` implementation which is Python-based. Our testing confirms this does **not** bottleneck throughput on Blackwell hardware. Do **not** attempt to use `--tokenizer-mode fast` or a different model's tokenizer, as this will cause a vocabulary mismatch and significantly degrade performance.
+*   **"temperature==0 (greedy)"**: We explicitly add `--temperature 0` to our commands to ensure deterministic results and suppress this warning.
 ```
 
 ### 4-Node Cluster Benchmark (1.5M TPM Simulation)
@@ -227,7 +242,12 @@ kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
     --request-rate 20.0 \
     --num-prompts 300 \
     --trust-remote-code \
-    --endpoint /completions
+    --endpoint /completions \
+    --temperature 0
+
+### Notes on Benchmarking Warnings
+*   **"Using a slow tokenizer"**: This warning is **expected** for Kimi-K2.5. The model uses a custom `tiktoken` implementation which is Python-based. Our testing confirms this does **not** bottleneck throughput on Blackwell hardware. Do **not** attempt to use `--tokenizer-mode fast` or a different model's tokenizer, as this will cause a vocabulary mismatch and significantly degrade performance.
+*   **"temperature==0 (greedy)"**: We explicitly add `--temperature 0` to our commands to ensure deterministic results and suppress this warning.
 ```
 
 
