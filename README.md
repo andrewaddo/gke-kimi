@@ -77,11 +77,12 @@ This deployment is heavily tuned to extract maximum tokens-per-second (TPS) from
 ### A. Environment Variables
 *   `ENABLE_NVFP4_SM120="1"`: **Crucial.** Enables hardware-accelerated 4-bit floating-point (FP4) math natively on Blackwell (SM120) Tensor Cores.
 *   `VLLM_ATTENTION_BACKEND="FLASHINFER"`: Forces vLLM to use FlashInfer, which provides highly optimized attention kernels specifically tuned for modern NVIDIA architectures.
+*   `VLLM_USE_V1="0"`: **Production Stability.** Forces the use of the stable `v0` engine. While vLLM's experimental `v1` engine architecture boasts a highly aggressive "zero-overhead" Block-Level memory manager (which achieves incredible single-node throughput), it currently suffers from distributed communication timeouts (`RuntimeError: cancelled`) when attempting to scale a 1-Trillion parameter MoE model across 8 GPUs using Tensor Parallelism. We use `v0` for rock-solid cluster stability, relying on the GKE Inference Gateway to optimize the cache performance instead.
 
 ### B. vLLM Server Arguments (`api_server.py`)
 *   `--model /models`: The path to the NVIDIA-optimized NVFP4 weights.
 *   `--tensor-parallel-size 8`: Distributes the model tensors across all 8 GPUs on the single node. We **do not** use Pipeline Parallelism (PP) here because the 768GB aggregate VRAM is sufficient to hold the entire model on one node, avoiding slow PCIe inter-node latency.
-*   `--enable-expert-parallel`: **Crucial for MoE.** Instead of slicing every tensor across all GPUs (Tensor Parallelism), EP places entire "experts" on specific GPUs. This drastically reduces the inter-GPU communication overhead over the PCIe bus.
+*   `--enable-expert-parallel`: **Crucial for MoE.** Instead of slicing every tensor across all GPUs (Tensor Parallelism), EP places entire "experts" on specific GPUs. This drastically reduces the inter-GPU communication overhead over the PCIe bus. *(Note: Expert Parallelism is a major feature of both the `v0` and experimental `v1` engines, but it is much more stable in `v0` for models of this immense size).*
 *   `--compilation_config.pass_config.fuse_allreduce_rms true`: A performance optimization that fuses the AllReduce communication step with the subsequent RMSNorm operation into a single GPU kernel, significantly reducing memory bandwidth pressure.
 *   `--mm-encoder-tp-mode data`: Runs the small (~400M) vision encoder in Data Parallel mode rather than slicing it via Tensor Parallelism, preventing unnecessary PCIe communication bottlenecks for multimodal inputs.
 *   `--enable-prefix-caching`: **The key to 1.5M TPM.** Enables KV-cache reuse. If multiple requests share the same system prompt or large codebase prefix, vLLM skips the expensive "prefill" compute phase for those tokens.
