@@ -162,9 +162,10 @@ kubectl apply -f deploy/manifests/vllm-deployment-farm.yaml
 # This configures the EPP with the `prefix-cache-scorer` (Weight: 10)
 kubectl apply -f deploy/manifests/vllm-unified-gateway.yaml
 
-# 3. Apply the Health Check Policy (Fixes 503 Backend Errors)
-# Tells the Load Balancer to check the /health endpoint
+# 3. Apply Connection & Health Check Policies (Production Hardening)
+# Fixes 503 Backend Errors and connection drops during high RPS
 kubectl apply -f deploy/manifests/vllm-health-check-policy.yaml
+kubectl apply -f deploy/manifests/vllm-gateway-connection-fix.yaml
 
 # 4. Deploy the Metric-Driven Autoscaler (HPA)
 kubectl apply -f deploy/manifests/vllm-unified-hpa.yaml

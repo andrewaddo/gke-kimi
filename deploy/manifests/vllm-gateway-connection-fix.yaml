@@ -1,0 +1,14 @@
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: kimi-connection-policy
+  namespace: kimi-k25
+spec:
+  default:
+    connectionDraining:
+      drainingTimeoutSec: 60
+    timeoutSec: 300 # Increase timeout for long-running streaming responses
+  targetRef:
+    group: inference.networking.k8s.io
+    kind: InferencePool
+    name: kimi-unified-pool

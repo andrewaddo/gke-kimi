@@ -99,31 +99,40 @@ To solve the single-node VRAM bottleneck, the workload (40 prefixes) was distrib
 **Conclusion:** 
 The hardware and the GKE Inference Gateway are capable of sustaining **>63,000 tok/s (~3.7M TPM)** on just 3 nodes. To achieve this throughput reliably at >20 RPS in production, explicit tuning of the GKE Service's `BackendConfig` (increasing `maxConnectionsPerEndpoint`) is required to prevent the Load Balancer from dropping connections.
 
-### 4-Node Cluster Validation (1.5M TPM Simulation)
-To validate the enterprise scaling requirement, a high-concurrency benchmark was executed across the 4-node Blackwell farm (32 GPUs). 
+### 3. Realistic Production Simulation (500 Developers / 5 Codebases)
+To test a true enterprise coding environment, a high-concurrency benchmark was designed to simulate 500 developers actively querying 5 distinct monolithic codebases. 
+
+**The Simulation Design:**
+*   **Shared Context (`--prefix-repetition-num-prefixes 5`):** Represents the 5 core repositories. Modern AI coding assistants (like Copilot or Cursor) inject massive amounts of shared RAG context (architecture, imports, libraries) into every prompt.
+*   **Prefix Length (`--prefix-repetition-prefix-len 20000`):** 20,000 tokens simulates a heavy context window (~600-1,000 lines of code + system prompts).
+*   **Unique Developer Edits (`--num-prompts 500`):** The benchmark appends unique, random suffixes to the shared prefixes, perfectly modeling 500 developers asking unique questions about the same 5 codebases.
+*   **Active Load (`--request-rate 10.0`):** Simulates the aggregate RPS of 500 developers during peak hours.
 
 **Command Executed:**
 ```bash
-kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
-  vllm bench serve \
-    --model "/models" \
-    --base-url "http://kimi-k25-service:30001/v1" \
-    --dataset-name "prefix_repetition" \
-    --prefix-repetition-prefix-len 10000 \
-    --prefix-repetition-num-prefixes 40 \
-    --prefix-repetition-output-len 300 \
-    --request-rate 20.0 \
-    --num-prompts 300 \
-    --trust-remote-code \
-    --endpoint /completions \
-    --temperature 0
+vllm bench serve \
+  --base-url "http://10.128.15.232" \
+  --dataset-name "prefix_repetition" \
+  --prefix-repetition-prefix-len 20000 \
+  --prefix-repetition-num-prefixes 5 \
+  --prefix-repetition-output-len 200 \
+  --num-prompts 500 \
+  --request-rate 10.0
 ```
 
-**Outcome:** The cluster successfully delivered over **33,500 TPS**, confirming that a 4-node `g4-standard-384` configuration easily meets the 1.5M TPM target when utilizing Prefix Caching, reaching over **2.0M TPM**.
+| Metric | Scenario M1 (Round-Robin) | **Scenario C (GKE Gateway)** |
+| :--- | :--- | :--- |
+| **Total Token Throughput** | 126,613 tok/s | **130,434 tok/s** |
+| **Mean TTFT (Latency)** | 5.23s | **0.66s (8x Faster)** |
+| **P99 TTFT (Worst Case)** | 19.40s | **1.17s (16x Faster)** |
+| **Mean TPOT (Gen Speed)** | 211ms | **175ms** |
+| **Peak Concurrent Requests**| 496 (Traffic Jam) | **397 (Managed Queue)** |
 
-*   **Configuration:** 1x On-Demand Node + 3x Spot Nodes.
-*   **Routing:** Internal Service LoadBalancer.
-*   **Observation:** Under extreme load (20 RPS), the cluster sustained high throughput but hit uvicorn connection limits, resulting in some failed requests. For production 1.5M TPM sustained load, tuning the `OS backlog` and `vLLM max_num_seqs` is recommended.
+**Analysis (The Traffic Cop Effect):**
+While raw throughput appears similar, the **User Experience (Latency) is drastically different**.
+*   **Round-Robin Failure:** The standard Kubernetes service blindly sprayed the 500 requests across the 3 nodes. Because it ignored active queue depths (`num_requests_running`), it accidentally sent massive bursts of requests to the same GPU. This choked the memory bandwidth, causing 496 requests to jam simultaneously. The unlucky developers at the back of the queue waited **19.4 seconds** for their first token.
+*   **Gateway Success:** The GKE Inference Gateway used its `queue-scorer` plugin. If Node 1 had 15 active developers and Node 2 had 5, the Gateway dynamically diverted new traffic to Node 2, even if both nodes had the codebase cached. This intelligent balancing kept Peak Concurrency down to 397. 
+*   **Outcome:** By preventing GPU traffic jams, the Gateway transformed an unusable, stuttering service (19s waits) into a snappy, sub-second coding assistant (**0.66s average wait**) for all 500 developers.
 
 ---
 
@@ -206,7 +215,64 @@ vllm bench serve \
 **Note on Success Rate:** The 13.4% failure rate in Scenario C was due to reaching the maximum connection backlog of the Internal L7 Load Balancer at 15 RPS, rather than vLLM engine instability. For production workloads, tuning the GKE Gateway's `MaxConnections` is recommended.
 
 **Outcome:** The 3-node cluster utilizing the GKE Inference Gateway completely eclipsed the 1.5M TPM target, reaching nearly **2.5M TPM**. By eliminating the O(N²) attention tax through intelligent VRAM partitioning, the effective throughput per node jumped from ~8k tok/s to over **~13.7k tok/s**, yielding a >5x total system improvement over a standalone node.
-To achieve the target of 1.5M TPM (25,000 TPS), the architecture must scale horizontally while maintaining the high prefix cache hit rate demonstrated in Scenario A.
 
-*   **Required Scale:** **4 Nodes** (32x RTX PRO 6000 Blackwell GPUs).
-*   **Routing Requirement:** Scaling to multiple nodes **mandates** the use of a Layer 7 router capable of **Prefix-Aware Routing** (such as the GKE Inference Gateway). Without prefix-aware routing, requests for identical context will be distributed randomly across nodes, resulting in cache misses (Scenario B performance) and necessitating 7+ nodes to reach the throughput target.
+### 4-Node Cluster Validation (1.5M TPM Simulation)
+To validate the enterprise scaling requirement, a high-concurrency benchmark was executed across the 4-node Blackwell farm (32 GPUs). 
+
+**Command Executed:**
+```bash
+kubectl exec -it deployment/kimi-k25-vllm -n kimi-k25 -c vllm-server -- \
+  vllm bench serve \
+    --model "/models" \
+    --base-url "http://kimi-k25-service:30001/v1" \
+    --dataset-name "prefix_repetition" \
+    --prefix-repetition-prefix-len 10000 \
+    --prefix-repetition-num-prefixes 40 \
+    --prefix-repetition-output-len 300 \
+    --request-rate 20.0 \
+    --num-prompts 300 \
+    --trust-remote-code \
+    --endpoint /completions \
+    --temperature 0
+```
+
+**Outcome:** The cluster successfully delivered over **33,500 TPS**, confirming that a 4-node `g4-standard-384` configuration easily meets the 1.5M TPM target when utilizing Prefix Caching, reaching over **2.0M TPM**.
+
+*   **Configuration:** 1x On-Demand Node + 3x Spot Nodes.
+*   **Routing:** Internal Service LoadBalancer.
+*   **Observation:** Under extreme load (20 RPS), the cluster sustained high throughput but hit uvicorn connection limits, resulting in some failed requests. For production 1.5M TPM sustained load, tuning the `OS backlog` and `vLLM max_num_seqs` is recommended.
+
+### Realistic Production Simulation (500 Developers / 5 Codebases)
+To test a true enterprise coding environment, a high-concurrency benchmark was designed to simulate 500 developers actively querying 5 distinct monolithic codebases on our 3-node cluster.
+
+**The Simulation Design:**
+*   **Shared Context (`--prefix-repetition-num-prefixes 5`):** Represents the 5 core repositories. Modern AI coding assistants (like Copilot or Cursor) inject massive amounts of shared RAG context (architecture, imports, libraries) into every prompt.
+*   **Prefix Length (`--prefix-repetition-prefix-len 20000`):** 20,000 tokens simulates a heavy context window (~600-1,000 lines of code + system prompts).
+*   **Unique Developer Edits (`--num-prompts 500`):** The benchmark appends unique, random suffixes to the shared prefixes, perfectly modeling 500 developers asking unique questions about the same 5 codebases.
+*   **Active Load (`--request-rate 10.0`):** Simulates the aggregate RPS of 500 developers during peak hours.
+
+**Command Executed:**
+```bash
+vllm bench serve \
+  --base-url "http://10.128.15.232" \
+  --dataset-name "prefix_repetition" \
+  --prefix-repetition-prefix-len 20000 \
+  --prefix-repetition-num-prefixes 5 \
+  --prefix-repetition-output-len 200 \
+  --num-prompts 500 \
+  --request-rate 10.0
+```
+
+| Metric | Scenario M1 (Round-Robin) | **Scenario C (GKE Gateway)** |
+| :--- | :--- | :--- |
+| **Total Token Throughput** | 126,613 tok/s | **130,434 tok/s** |
+| **Mean TTFT (Latency)** | 5.23s | **0.66s (8x Faster)** |
+| **P99 TTFT (Worst Case)** | 19.40s | **1.17s (16x Faster)** |
+| **Mean TPOT (Gen Speed)** | 211ms | **175ms** |
+| **Peak Concurrent Requests**| 496 (Traffic Jam) | **397 (Managed Queue)** |
+
+**Analysis (The Traffic Cop Effect):**
+While raw throughput appears similar, the **User Experience (Latency) is drastically different**.
+*   **Round-Robin Failure:** The standard Kubernetes service blindly sprayed the 500 requests across the 3 nodes. Because it ignored active queue depths (`num_requests_running`), it accidentally sent massive bursts of requests to the same GPU. This choked the memory bandwidth, causing 496 requests to jam simultaneously. The unlucky developers at the back of the queue waited **19.4 seconds** for their first token.
+*   **Gateway Success:** The GKE Inference Gateway used its `queue-scorer` plugin. If Node 1 had 15 active developers and Node 2 had 5, the Gateway dynamically diverted new traffic to Node 2, even if both nodes had the codebase cached. This intelligent balancing kept Peak Concurrency down to 397. 
+*   **Outcome:** By preventing GPU traffic jams, the Gateway transformed an unusable, stuttering service (19s waits) into a snappy, sub-second coding assistant (**0.66s average wait**) for all 500 developers.
