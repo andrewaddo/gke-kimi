@@ -56,7 +56,8 @@ vllm bench serve \
   --port 30001 \
   --trust-remote-code \
   --endpoint /v1/completions \
-  --temperature 0```
+  --temperature 0
+```
 
 ---
 
