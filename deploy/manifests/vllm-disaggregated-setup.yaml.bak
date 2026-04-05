@@ -1,0 +1,228 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kimi-k25-vllm-prefill
+  namespace: kimi-k25
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kimi-k25-vllm-prefill
+  template:
+    metadata:
+      labels:
+        app: kimi-k25-vllm-prefill
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      serviceAccountName: kimi-ksa
+      terminationGracePeriodSeconds: 30
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-nodepool
+                operator: In
+                values:
+                - rtx-6000-pool
+                - rtx-6000-spot-pool
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: kimi-k25-vllm-prefill
+            topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: vllm-server
+        image: us-central1-docker.pkg.dev/gpu-launchpad-playground/kimi-repo/vllm-openai:latest
+        env:
+        - name: ENABLE_NVFP4_SM120
+          value: "1"
+        - name: VLLM_ATTENTION_BACKEND
+          value: "FLASHINFER"
+        - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+          value: "30002"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          python3 -m vllm.entrypoints.openai.api_server \
+            --model /models \
+            --tensor-parallel-size 8 \
+            --enable-expert-parallel \
+            --gpu-memory-utilization 0.95 \
+            --max-model-len 65536 \
+            --kv-cache-dtype fp8 \
+            --kv-transfer-config '{"kv_connector":"NixlConnector", "kv_role":"kv_producer"}' \
+            --port 30001 \
+            --host 0.0.0.0
+        ports:
+        - containerPort: 30001
+        - containerPort: 30002
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+        volumeMounts:
+        - name: model-weights
+          mountPath: /models
+          readOnly: true
+      volumes:
+      - name: model-weights
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: kimi-k25-weights-bucket-gpu-launchpad-playground
+            mountOptions: "implicit-dirs,only-dir:Kimi-K2.5-NVFP4/"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kimi-k25-vllm-decode
+  namespace: kimi-k25
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kimi-k25-vllm-decode
+  template:
+    metadata:
+      labels:
+        app: kimi-k25-vllm-decode
+      annotations:
+        gke-gcsfuse/volumes: "true"
+    spec:
+      serviceAccountName: kimi-ksa
+      terminationGracePeriodSeconds: 30
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-nodepool
+                operator: In
+                values:
+                - rtx-6000-pool
+                - rtx-6000-spot-pool
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: kimi-k25-vllm-prefill
+            topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: vllm-server
+        image: us-central1-docker.pkg.dev/gpu-launchpad-playground/kimi-repo/vllm-openai:latest
+        env:
+        - name: ENABLE_NVFP4_SM120
+          value: "1"
+        - name: VLLM_ATTENTION_BACKEND
+          value: "FLASHINFER"
+        - name: VLLM_NIXL_SIDE_CHANNEL_PORT
+          value: "30002"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          python3 -m vllm.entrypoints.openai.api_server \
+            --model /models \
+            --tensor-parallel-size 8 \
+            --enable-expert-parallel \
+            --gpu-memory-utilization 0.95 \
+            --max-model-len 65536 \
+            --kv-cache-dtype fp8 \
+            --kv-transfer-config '{"kv_connector":"NixlConnector", "kv_role":"kv_consumer"}' \
+            --port 30001 \
+            --host 0.0.0.0
+        ports:
+        - containerPort: 30001
+        - containerPort: 30002
+        resources:
+          limits:
+            nvidia.com/gpu: 8
+        volumeMounts:
+        - name: model-weights
+          mountPath: /models
+          readOnly: true
+      volumes:
+      - name: model-weights
+        csi:
+          driver: gcsfuse.csi.storage.gke.io
+          volumeAttributes:
+            bucketName: kimi-k25-weights-bucket-gpu-launchpad-playground
+            mountOptions: "implicit-dirs,only-dir:Kimi-K2.5-NVFP4/"
+---
+apiVersion: ai.gke.io/v1
+kind: InferencePool
+metadata:
+  name: kimi-prefill-pool
+  namespace: kimi-k25
+spec:
+  selector:
+    matchLabels:
+      app: kimi-k25-vllm-prefill
+  model:
+    name: kimi-k2.5
+    version: v1
+---
+apiVersion: ai.gke.io/v1
+kind: InferencePool
+metadata:
+  name: kimi-decode-pool
+  namespace: kimi-k25
+spec:
+  selector:
+    matchLabels:
+      app: kimi-k25-vllm-decode
+  model:
+    name: kimi-k2.5
+    version: v1
+---
+apiVersion: ai.gke.io/v1
+kind: InferenceGatewayFilter
+metadata:
+  name: disaggregated-config
+  namespace: kimi-k25
+spec:
+  disaggregatedServing:
+    enabled: true
+    decodeBackend:
+      poolRef:
+        name: kimi-decode-pool
+    # llm-d integration for metrics and intelligent routing
+    routingStrategy: PrefixAware
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: kimi-gateway-disaggregated
+  namespace: kimi-k25
+spec:
+  gatewayClassName: gke-l7-rilb
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kimi-route-disaggregated
+  namespace: kimi-k25
+spec:
+  parentRefs:
+  - name: kimi-gateway-disaggregated
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /v1/chat/completions
+    backendRefs:
+    - group: ai.gke.io
+      kind: InferencePool
+      name: kimi-prefill-pool
+      port: 30001
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: ai.gke.io
+        kind: InferenceGatewayFilter
+        name: disaggregated-config

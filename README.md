@@ -117,9 +117,100 @@ Use the GKE Horizontal Pod Autoscaler configured with custom vLLM metrics.
 *   **Metric:** Scale based on `vllm_num_requests_running` or `vllm_gpu_cache_usage_perc` rather than raw CPU/GPU utilization (which are inaccurate for LLMs).
 *   **Threshold:** Trigger scale-up when a node reaches 80% of its tested Cache-Optimized capacity.
 
----
+## Milestone 2: Intelligent Unified Serving with GKE Inference Gateway
 
-## Manual Testing (API)
+To achieve massive scale (>2.0M TPM) and support high concurrency, a single node is insufficient. However, simply scaling standard Kubernetes pods (Round-Robin) leads to "Cache Thrashing" as all nodes attempt to process identical 10k-token prefills.
+
+The solution is the **GKE Inference Gateway** utilizing **Prefix-Aware Routing**. By intelligently routing requests based on their context, the Gateway ensures that 10k-token prefixes are perfectly partitioned across the cluster's VRAM. This allows the GPUs to skip the expensive $O(N^2)$ prefill compute stage entirely and operate at maximum memory-bound throughput (achieving >5x the single-node performance).
+
+### 1. Prerequisites (Infrastructure & CRDs)
+Ensure your cluster has the necessary Load Balancing and Autoscaling addons enabled, and that the required Gateway API Inference Extension CRDs are installed:
+
+```bash
+# 1. Enable Required GKE Addons
+gcloud container clusters update kimi-k25-cluster \
+  --zone us-central1-b \
+  --update-addons=HttpLoadBalancing=ENABLED,HorizontalPodAutoscaling=ENABLED
+
+# 2. Install Gateway API Inference Extension CRDs (GKE 1.34+)
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/raw/v1.0.0/config/crd/bases/inference.networking.x-k8s.io_inferenceobjectives.yaml
+
+# 3. Create Firewall Rule for Internal L7 Load Balancer (Proxy-Only Subnet)
+# Replace with your actual proxy-only subnet range (e.g., 10.129.0.0/23) and node tag
+gcloud compute firewall-rules create allow-gke-l7-rilb-inference \
+    --action=ALLOW \
+    --direction=INGRESS \
+    --rules=tcp:30001 \
+    --source-ranges=10.129.0.0/23,10.127.0.0/26 \
+    --target-tags=gke-kimi-k25-cluster-5699cb9b-node \
+    --network=default
+```
+
+### 2. Deploying the Unified Architecture
+Apply the specialized manifests that configure the vLLM farm, the Endpoint Picker (EPP), and the Gateway routing rules.
+
+#### Understanding the Gateway Configuration
+The core of the intelligent routing lies in the **Endpoint Picker (EPP)** configuration (`kimi-epp-config` ConfigMap in `vllm-unified-gateway.yaml`). It uses a weighted scoring system to determine the best pod for each incoming request:
+*   **`prefix-cache-scorer` (Weight: 10):** The Gateway hashes the incoming prompt and asks the vLLM pods if they have those tokens in their KV-Cache. It heavily biases routing toward the pod with the highest cache hit rate, completely skipping the compute-heavy Prefill phase.
+*   **`queue-scorer` (Weight: 1):** Acts as a tie-breaker or fallback. If no pod has a cache hit (or if multiple do), it routes to the pod with the shortest active request queue to prevent latency spikes.
+
+```bash
+# 1. Deploy the vLLM Farm (3 Replicas)
+kubectl apply -f deploy/manifests/vllm-deployment-farm.yaml
+
+# 2. Deploy the GKE Inference Gateway, EPP, and InferencePool
+# This configures the EPP with the `prefix-cache-scorer` (Weight: 10)
+kubectl apply -f deploy/manifests/vllm-unified-gateway.yaml
+
+# 3. Apply the Health Check Policy (Fixes 503 Backend Errors)
+# Tells the Load Balancer to check the /health endpoint
+kubectl apply -f deploy/manifests/vllm-health-check-policy.yaml
+
+# 4. Deploy the Metric-Driven Autoscaler (HPA)
+kubectl apply -f deploy/manifests/vllm-unified-hpa.yaml
+```
+
+### 3. Verification & Access
+The Gateway will take a few minutes to provision the Internal L7 Load Balancer and assign an IP address.
+
+```bash
+# 1. Wait for the Gateway to become 'Programmed' and copy the IP ADDRESS
+kubectl get gateway kimi-gateway-unified -n kimi-k25
+
+# 2. Monitor the Endpoint Picker (EPP) logs to ensure it discovers the vLLM pods
+kubectl logs -l app=kimi-unified-epp -n kimi-k25 --tail=50
+```
+
+Once the Gateway has an IP (e.g., `10.128.15.232`), you can access the OpenAI-compatible endpoint from within the cluster VPC:
+`http://10.128.15.232/v1/chat/completions`
+
+### 4. Running a High-Concurrency Benchmark
+Because the Gateway assigns an *Internal* Load Balancer IP address, you cannot run the benchmark directly from your local macOS/Windows terminal (you will get a timeout or a `bash: vllm: command not found` error). 
+
+To execute the benchmark and simulate real cluster traffic, you must run the `vllm bench` command **from inside one of the vLLM pods** in your cluster, targeting the Gateway's internal IP.
+
+```bash
+# 1. Get the name of a running vLLM pod
+POD_NAME=$(kubectl get pods -n kimi-k25 -l app=kimi-k25-vllm -o jsonpath='{.items[0].metadata.name}')
+
+# 2. Execute the benchmark from inside the pod, pointing to your Gateway IP
+# IMPORTANT: Replace "10.128.15.232" with your actual Gateway IP from Step 3!
+kubectl exec -it pod/$POD_NAME -n kimi-k25 -c vllm-server -- \
+  vllm bench serve \
+    --model "/models" \
+    --served-model-name "/models" \
+    --base-url "http://10.128.15.232" \
+    --dataset-name "prefix_repetition" \
+    --prefix-repetition-prefix-len 10000 \
+    --prefix-repetition-num-prefixes 15 \
+    --prefix-repetition-output-len 200 \
+    --num-prompts 150 \
+    --request-rate 15.0 \
+    --trust-remote-code \
+    --endpoint /v1/completions \
+    --temperature 0
+```
+
 
 To test the model manually from your local machine using the OpenAI-compatible API:
 
@@ -287,3 +378,46 @@ gcloud artifacts repositories delete kimi-repo --location us-central1 --quiet
 # 4. Remove the Service Account
 gcloud iam service-accounts delete kimi-gcsfuse-sa@$PROJECT_ID.iam.gserviceaccount.com --quiet
 ```
+
+---
+
+## Future Considerations: Scaling for High Concurrency (500+ Users)
+
+While the current architecture (3 nodes + GKE Inference Gateway) successfully achieves ~41,400 tok/s and handles ~130 concurrent requests with sub-100ms TPOT, scaling to support 500+ concurrent users requires specific tuning across the "Triple Constraint" of LLM serving: **Memory (VRAM)**, **Compute (Attention)**, and **Connection Stability**.
+
+### 1. The Trade-offs of High Concurrency
+
+When pushing a 1-Trillion parameter MoE model to high concurrency on a finite set of GPUs, you encounter the following trade-offs:
+
+*   **VRAM Capacity vs. Context Length:** To fit more concurrent user "slots" (KV-cache) in the remaining VRAM (after the ~500GB weight tax), you must either reduce the `max_model_len` or use more aggressive quantization (e.g., INT4 KV cache), which can impact long-context reasoning accuracy.
+*   **Throughput vs. Latency (TPOT):** As more users share the same 8 GPUs, the memory bandwidth is saturated. The Time-Per-Output-Token (TPOT) will slow down for all active users to accommodate the sheer volume of concurrent generations.
+*   **Prefill Interference:** When a new user submits a massive 10k-token prompt, it can "freeze" the generation of the 100 users already chatting while the GPU computes the prefill attention matrix.
+
+### 2. Required Technical Tuning for 500+ Concurrency
+
+To safely scale the current architecture, the following configuration changes are required at both the engine and infrastructure layers:
+
+#### A. vLLM Engine Tuning (The "VRAM Capacity" Layer)
+Update the `kimi-k25-vllm` deployment arguments to optimize for concurrent slots over raw single-stream speed:
+
+```bash
+# Recommended vLLM Flags for High Concurrency
+python3 -m vllm.entrypoints.openai.api_server \
+  ... (existing flags) ... \
+  --gpu-memory-utilization 0.98 \     # Maximize VRAM allocation for KV-cache
+  --max-num-seqs 512 \                # Increase the hard limit on concurrent requests (default is often 256)
+  --enable-chunked-prefill \          # Crucial: Breaks massive prefills into smaller chunks
+  --max-num-batched-tokens 8192 \     # Size of prefill chunks to prevent "generation stutters"
+  --kv-cache-dtype fp8                # Keep FP8 (or test INT4 if supported) to double capacity
+```
+
+#### B. GKE Gateway & Infrastructure Tuning (The "Pipe" Layer)
+Our benchmarks showed a 13.4% failure rate at 15 RPS not because the GPUs crashed, but because the **Internal L7 Load Balancer** hit its default connection limits.
+
+*   **BackendConfig Connection Pooling:** You must apply a `BackendConfig` CRD to the GKE Service to explicitly increase `maxConnectionsPerEndpoint` and tune the `timeoutSec`. Without this, the Gateway will drop requests (returning 503 Service Unavailable) even if the GPUs are idle.
+*   **OS-Level TCP Tuning:** Ensure the underlying node OS and container network namespaces are tuned to handle sudden bursts of concurrent handshakes (e.g., increasing `net.core.somaxconn`).
+
+#### C. Horizontal Scaling (The "Throughput" Layer)
+Even with Prefix-Aware Routing partitioning the cache, each 8-GPU node has a hard mathematical limit on how many KV-cache blocks it can hold before it must evict and trigger the O(N²) prefill penalty. 
+
+To maintain a responsive TPOT (< 100ms) for 500+ concurrent users with 10k-token contexts, the cluster must be scaled horizontally to **5-7 nodes** (40-56 GPUs). The GKE Inference Gateway will seamlessly distribute the cache state across these new nodes.

@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kimi-epp-config
+  namespace: kimi-k25
+data:
+  config.yaml: |
+    apiVersion: inference.networking.x-k8s.io/v1alpha1
+    kind: EndpointPickerConfig
+    plugins:
+      - type: queue-scorer
+      - type: prefix-cache-scorer
+    schedulingProfiles:
+      - name: default
+        plugins:
+          - pluginRef: queue-scorer
+            weight: 1
+          - pluginRef: prefix-cache-scorer
+            weight: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kimi-unified-epp
+  namespace: kimi-k25
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kimi-unified-epp
+  template:
+    metadata:
+      labels:
+        app: kimi-unified-epp
+    spec:
+      serviceAccountName: kimi-ksa # Reuse existing SA with permissions
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: cloud.google.com/gke-nodepool
+                operator: In
+                values:
+                - default-pool
+      containers:
+      - name: endpoint-picker
+        image: registry.k8s.io/gateway-api-inference-extension/epp:v1.4.0
+        args:
+        - --pool-name=kimi-unified-pool
+        - --pool-namespace=kimi-k25
+        - --config-file=/etc/endpoint-picker/config.yaml
+        - --health-checking
+        ports:
+        - containerPort: 9002
+          name: grpc
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/endpoint-picker
+      volumes:
+      - name: config-volume
+        configMap:
+          name: kimi-epp-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kimi-unified-epp-svc
+  namespace: kimi-k25
+spec:
+  selector:
+    app: kimi-unified-epp
+  ports:
+  - protocol: TCP
+    port: 9002
+    targetPort: 9002
+---
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: kimi-unified-pool
+  namespace: kimi-k25
+spec:
+  endpointPickerRef:
+    name: kimi-unified-epp-svc
+    port:
+      number: 9002
+  selector:
+    matchLabels:
+      app: kimi-k25-vllm
+  targetPorts:
+  - number: 30001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: kimi-gateway-unified
+  namespace: kimi-k25
+spec:
+  gatewayClassName: gke-l7-rilb
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kimi-route-unified
+  namespace: kimi-k25
+spec:
+  parentRefs:
+  - name: kimi-gateway-unified
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /v1
+    backendRefs:
+    - group: inference.networking.k8s.io
+      kind: InferencePool
+      name: kimi-unified-pool

@@ -4,7 +4,7 @@ metadata:
   name: kimi-k25-vllm
   namespace: kimi-k25
 spec:
-  replicas: 4
+  replicas: 3
   selector:
     matchLabels:
       app: kimi-k25-vllm

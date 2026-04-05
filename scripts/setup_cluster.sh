@@ -31,6 +31,7 @@ if ! gcloud container clusters describe $CLUSTER_NAME --zone $ZONE > /dev/null 2
       --workload-pool="$PROJECT_ID.svc.id.goog" \
       --addons GcsFuseCsiDriver \
       --enable-image-streaming \
+      --enable-managed-prometheus \
       --num-nodes=1 \
       --machine-type="n2-standard-8"
 else
@@ -46,14 +47,39 @@ if ! gcloud container node-pools describe rtx-6000-pool --cluster $CLUSTER_NAME 
       --project=$PROJECT_ID \
       --cluster=$CLUSTER_NAME \
       --zone=$ZONE \
-      --node-locations=us-central1-a,us-central1-c,us-central1-f \
+      --node-locations=us-central1-b \
       --accelerator=type=nvidia-rtx-pro-6000,count=8 \
       --machine-type=g4-standard-384 \
-      --num-nodes=1 \
+      --num-nodes=0 \
+      --enable-autoscaling \
+      --min-nodes=0 \
+      --max-nodes=4 \
       --disk-size=1000GB \
       --workload-metadata=GKE_METADATA
 else
   echo "Node pool rtx-6000-pool already exists."
+fi
+
+# 2.5 Create Spot Node Pool
+echo "Checking if Node Pool: rtx-6000-spot-pool exists..."
+if ! gcloud container node-pools describe rtx-6000-spot-pool --cluster $CLUSTER_NAME --zone $ZONE > /dev/null 2>&1; then
+  echo "Creating Spot Node Pool with RTX PRO 6000 Blackwell GPUs..."
+  gcloud container node-pools create rtx-6000-spot-pool \
+      --project=$PROJECT_ID \
+      --cluster=$CLUSTER_NAME \
+      --zone=$ZONE \
+      --node-locations=us-central1-b \
+      --accelerator=type=nvidia-rtx-pro-6000,count=8 \
+      --machine-type=g4-standard-384 \
+      --num-nodes=0 \
+      --spot \
+      --enable-autoscaling \
+      --min-nodes=0 \
+      --max-nodes=4 \
+      --disk-size=1000GB \
+      --workload-metadata=GKE_METADATA
+else
+  echo "Node pool rtx-6000-spot-pool already exists."
 fi
 
 # 3. Create Namespace

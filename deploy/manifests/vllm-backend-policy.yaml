@@ -1,0 +1,13 @@
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: kimi-backend-policy
+  namespace: kimi-k25
+spec:
+  default:
+    healthCheck:
+      requestPath: /health
+  targetRef:
+    group: inference.networking.k8s.io
+    kind: InferencePool
+    name: kimi-unified-pool
