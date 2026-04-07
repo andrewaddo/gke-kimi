@@ -4,7 +4,7 @@ metadata:
   name: kimi-k25-vllm
   namespace: kimi-k25
 spec:
-  replicas: 3
+  replicas: 4
   selector:
     matchLabels:
       app: kimi-k25-vllm
@@ -30,6 +30,7 @@ spec:
                 values:
                 - rtx-6000-pool
                 - rtx-6000-spot-pool
+                - rtx-6000-spot-pool-2
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
           - labelSelector:
@@ -54,20 +55,21 @@ spec:
         args:
         - |
           echo "Starting vLLM Server on G4 Blackwell Farm (NVFP4)..."
-          python3 -m vllm.entrypoints.openai.api_server \
-            --model /models \
-            --tensor-parallel-size 8 \
-            --enable-expert-parallel \
-            --compilation_config.pass_config.fuse_allreduce_rms true \
-            --mm-encoder-tp-mode data \
-            --gpu-memory-utilization 0.95 \
-            --max-model-len 65536 \
-            --kv-cache-dtype fp8 \
-            --enable-prefix-caching \
-            --trust-remote-code \
-            --port 30001 \
-            --host 0.0.0.0 \
-            --tool-call-parser kimi_k2 \
+          - |
+            python3 -m vllm.entrypoints.openai.api_server \
+              --model /models \
+              --tensor-parallel-size 8 \
+              --enable-expert-parallel \
+              --compilation_config.pass_config.fuse_allreduce_rms true \
+              --mm-encoder-tp-mode data \
+              --gpu-memory-utilization 0.95 \
+              --max-model-len 131072 \
+              --max-num-seqs 32 \
+              --kv-cache-dtype fp8 \
+              --enable-prefix-caching \
+              --trust-remote-code \
+              --port 30001 \
+              --host 0.0.0.0
             --reasoning-parser kimi_k2
         ports:
         - containerPort: 30001
@@ -86,7 +88,7 @@ spec:
           driver: gcsfuse.csi.storage.gke.io
           volumeAttributes:
             bucketName: kimi-k25-weights-bucket-gpu-launchpad-playground
-            mountOptions: "metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,metadata-cache:negative-ttl-secs:0,file-cache:max-size-mb:-1,file-cache:cache-file-for-range-read:true,file-cache:enable-parallel-downloads:true,implicit-dirs,only-dir:Kimi-K2.5-NVFP4/"
+            mountOptions: "metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,metadata-cache:negative-ttl-secs:0,file-cache:max-size-mb:100000,file-cache:cache-file-for-range-read:true,file-cache:enable-parallel-downloads:true,implicit-dirs,only-dir:Kimi-K2.5-NVFP4/"
             skipCSIBucketAccessCheck: "true"
       - name: shm
         emptyDir:

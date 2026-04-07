@@ -423,3 +423,11 @@ Our benchmarks showed a 13.4% failure rate at 15 RPS not because the GPUs crashe
 Even with Prefix-Aware Routing partitioning the cache, each 8-GPU node has a hard mathematical limit on how many KV-cache blocks it can hold before it must evict and trigger the O(N²) prefill penalty. 
 
 To maintain a responsive TPOT (< 100ms) for 500+ concurrent users with 10k-token contexts, the cluster must be scaled horizontally to **5-7 nodes** (40-56 GPUs). The GKE Inference Gateway will seamlessly distribute the cache state across these new nodes.
+
+---
+
+## Detailed Benchmark Archives
+For comprehensive technical breakdowns of the benchmarking scenarios executed on this cluster, refer to the following logs:
+*   [Milestone 1 & 2: Single Node & Baseline Gateway Performance](benchmark.md)
+*   [Milestone 3: Kimi API Best Practices & Streaming Load Tests](milestone3-full-benchmarks.md)
+*   [Milestone 4: Full-Cluster Stress Tests & Boundary Limits](milestone4-full-cluster-benchmarks.md)
