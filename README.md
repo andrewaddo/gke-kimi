@@ -424,6 +424,29 @@ Even with Prefix-Aware Routing partitioning the cache, each 8-GPU node has a har
 
 To maintain a responsive TPOT (< 100ms) for 500+ concurrent users with 10k-token contexts, the cluster must be scaled horizontally to **5-7 nodes** (40-56 GPUs). The GKE Inference Gateway will seamlessly distribute the cache state across these new nodes.
 
+## Milestone 3: Full Fetch Benchmark Tests (Kimi API Best Practices)
+
+To validate the cluster against real-world use cases, we implemented a comprehensive benchmarking suite aligned with the official Kimi API best practices:
+1.  **Mandatory Streaming:** Benchmarks evaluated streaming performance to prevent TCP connection timeouts (504 Gateway Timeouts) during long-context generation.
+2.  **High-Temperature Reasoning:** Kimi K2.5 was tested at `temperature=1.0` to simulate true "Thinking" mode variance.
+3.  **Massive Context Windows:** Evaluated scenarios scaling up to 128k (Agentic) tokens and generating up to 4k (Reasoning) tokens.
+
+## Milestone 4: Full-Cluster Stress Tests & Boundary Limits
+
+We executed the three production workloads against the entire 4-node cluster (32 GPUs, 3,072GB VRAM) to establish the maximum stable operating thresholds:
+
+*   **Chat Stress Test:** Flawlessly handled 500 concurrent prompts at 15 RPS, processing over 1M input tokens with zero dropped connections. Achieved **9,201 tok/s** at an 83ms TPOT.
+*   **Reasoning Limits:** Generating 4k output tokens takes 4 minutes, causing standard Load Balancer TCP timeouts. By capping output to 1k tokens and 5 RPS, the cluster stabilized and achieved **5,360 tok/s**.
+*   **Agentic Limits:** The Kimi K2.5 model has a hardcoded limit of `65,536` tokens. When pushing 128k prefixes, the model rejects it. Limiting the test to the maximum native 60k boundary achieved a massive **17,338 tok/s** as the Gateway perfectly cached the massive payloads.
+
+## Milestone 5: vLLM v1 Engine Experimental Benchmarks
+
+We evaluated the experimental **vLLM v1 engine architecture** against the stable `v0` engine to measure the performance delta of its "Zero-Overhead" Block-Level memory manager.
+
+*   **Performance:** The `v1` engine is up to 24% faster for short chat queries (11,418 tok/s) and reduced Queue delays (TTFT) by 26%.
+*   **Stability Failure:** The `v1` architecture is fundamentally unstable for massive MoE models. It failed 62% of long reasoning requests due to distributed memory manager (`shm_broadcast`) panics, and instantly collapsed (100% Failure / 503 Service Unavailable) when attempting to route massive 60k Agentic contexts.
+*   **Conclusion:** The stable `v0` engine (`VLLM_USE_V1=0`) remains the only viable path for true, massive-scale Enterprise AI serving.
+
 ---
 
 ## Detailed Benchmark Archives
