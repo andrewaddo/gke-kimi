@@ -48,29 +48,26 @@ spec:
         - name: VLLM_SERVER_DEV_MODE
           value: "1"
         - name: VLLM_USE_V1
-          value: "0"
+          value: "1"
         - name: NCCL_DEBUG
           value: "INFO"
         command: ["/bin/bash", "-c"]
         args:
         - |
           echo "Starting vLLM Server on G4 Blackwell Farm (NVFP4)..."
-          - |
-            python3 -m vllm.entrypoints.openai.api_server \
-              --model /models \
-              --tensor-parallel-size 8 \
-              --enable-expert-parallel \
-              --compilation_config.pass_config.fuse_allreduce_rms true \
-              --mm-encoder-tp-mode data \
-              --gpu-memory-utilization 0.95 \
-              --max-model-len 131072 \
-              --max-num-seqs 32 \
-              --kv-cache-dtype fp8 \
-              --enable-prefix-caching \
-              --trust-remote-code \
-              --port 30001 \
-              --host 0.0.0.0
-            --reasoning-parser kimi_k2
+          python3 -m vllm.entrypoints.openai.api_server \
+            --model /models \
+            --tensor-parallel-size 8 \
+            --enable-expert-parallel \
+            --compilation_config.pass_config.fuse_allreduce_rms true \
+            --mm-encoder-tp-mode data \
+            --gpu-memory-utilization 0.95 \
+            --max-model-len 65536 \
+            --kv-cache-dtype fp8 \
+            --enable-prefix-caching \
+            --trust-remote-code \
+            --port 30001 \
+            --host 0.0.0.0
         ports:
         - containerPort: 30001
         resources:

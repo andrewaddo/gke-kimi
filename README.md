@@ -431,3 +431,4 @@ For comprehensive technical breakdowns of the benchmarking scenarios executed on
 *   [Milestone 1 & 2: Single Node & Baseline Gateway Performance](benchmark.md)
 *   [Milestone 3: Kimi API Best Practices & Streaming Load Tests](milestone3-full-benchmarks.md)
 *   [Milestone 4: Full-Cluster Stress Tests & Boundary Limits](milestone4-full-cluster-benchmarks.md)
+*   [Milestone 5: vLLM v1 Engine Experimental Tests](milestone5-v1-engine-benchmarks.md)
