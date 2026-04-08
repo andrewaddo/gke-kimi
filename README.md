@@ -443,9 +443,8 @@ We executed the three production workloads against the entire 4-node cluster (32
 
 We evaluated the experimental **vLLM v1 engine architecture** against the stable `v0` engine to measure the performance delta of its "Zero-Overhead" Block-Level memory manager.
 
-*   **Performance:** The `v1` engine is up to 24% faster for short chat queries (11,418 tok/s) and reduced Queue delays (TTFT) by 26%.
-*   **Stability Failure:** The `v1` architecture is fundamentally unstable for massive MoE models. It failed 62% of long reasoning requests due to distributed memory manager (`shm_broadcast`) panics, and instantly collapsed (100% Failure / 503 Service Unavailable) when attempting to route massive 60k Agentic contexts.
-*   **Conclusion:** The stable `v0` engine (`VLLM_USE_V1=0`) remains the only viable path for true, massive-scale Enterprise AI serving.
+*   **Synthetic Payload Failure:** The `v1` architecture is currently too brittle for standard load testing. Its newly rewritten Rust/C++ tokenization pipeline instantly rejected massive streams of synthetic tokens (`random` and `prefix_repetition` datasets) with `400 Bad Request` or crashed the internal router (`503 Service Unavailable`).
+*   **Conclusion:** While the `v1` engine may process simple manual queries, it is not production-ready for massive 1T MoE models deployed across 32 GPUs. An enterprise API cannot afford an inference engine that crashes on non-standard token patterns. The stable `v0` engine (`VLLM_USE_V1=0`) remains the only viable path for true, massive-scale Enterprise AI serving.
 
 ---
 
