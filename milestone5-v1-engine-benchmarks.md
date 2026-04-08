@@ -5,7 +5,7 @@ Re-run the three distinct Kimi K2.5 production workloads (Chat, Reasoning, Agent
 
 ## 2. Infrastructure Setup
 The cluster utilizes the unified `kimi-k25-vllm` pool behind the GKE Inference Gateway. 
-*   **Capacity:** Due to an unavoidable physical datacenter stockout of RTX 6000 hardware in `us-central1` (despite adequate project quota), the cluster scaled to **3 nodes (24 GPUs)** for this benchmark suite.
+*   **Capacity:** After overcoming temporary datacenter stockouts in `us-central1`, the cluster successfully scaled to the full **4 nodes (32 GPUs, 3,072GB VRAM)** for this benchmark suite.
 *   **Engine Update:** `VLLM_USE_V1="1"` was explicitly set in the deployment.
 
 ---
