@@ -443,8 +443,10 @@ We executed the three production workloads against the entire 4-node cluster (32
 
 We evaluated the experimental **vLLM v1 engine architecture** against the stable `v0` engine to measure the performance delta of its "Zero-Overhead" Block-Level memory manager.
 
-*   **Synthetic Payload Failure:** The `v1` architecture is currently too brittle for standard load testing. Its newly rewritten Rust/C++ tokenization pipeline instantly rejected massive streams of synthetic tokens (`random` and `prefix_repetition` datasets) with `400 Bad Request` or crashed the internal router (`503 Service Unavailable`).
-*   **Conclusion:** While the `v1` engine may process simple manual queries, it is not production-ready for massive 1T MoE models deployed across 32 GPUs. An enterprise API cannot afford an inference engine that crashes on non-standard token patterns. The stable `v0` engine (`VLLM_USE_V1=0`) remains the only viable path for true, massive-scale Enterprise AI serving.
+*   **The Network Broadcast Limitation:** We discovered that the `v1` architecture's shared-memory manager (`shm_broadcast`) crashes completely over standard Ethernet when attempting to coordinate memory across multiple 8-GPU nodes, resulting in `503` and `400` errors for massive synthetic payloads.
+*   **The "Island Architecture" Solution:** By configuring strict `podAntiAffinity` to ensure 1 Pod per Node, we completely isolated the `v1` engines from each other (relying exclusively on NVLink) and used the GKE Gateway to route traffic.
+*   **Performance:** In Island Mode, the `v1` engine flawlessly processed massive synthetic payloads with zero failures, achieving an astounding **14,606 tok/s** and a perfectly stable **87ms TPOT**.
+*   **Conclusion:** The `v1` engine (`VLLM_USE_V1=1`) is highly capable for massive 1T MoE models, but **only** if deployed in complete node isolation ("Island Architecture") with the GKE Gateway handling all inter-node traffic distribution.
 
 ---
 
