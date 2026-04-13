@@ -32,7 +32,7 @@ python3 -m vllm.entrypoints.openai.api_server \
 ### Key Environment Variables
 *   `ENABLE_NVFP4_SM120=1`: Enables hardware-accelerated 4-bit floating-point (FP4) operations native to Blackwell (SM120) GPUs.
 *   `VLLM_ATTENTION_BACKEND=FLASHINFER`: Selects FlashInfer as the highly optimized attention backend.
-*   `VLLM_USE_V1=0`: Forces the use of the stable v0 vLLM engine, bypassing experimental v1 features for increased stability.
+*   `VLLM_USE_V1=0`: Forces the use of the deprecated v0 vLLM engine, bypassing v1 features (not recommended).
 
 ---
 
@@ -76,7 +76,7 @@ The following tables synthesize the results of multiple benchmark runs, isolatin
 | **Hit Rate (Estimated)** | 0% | < 5% | High |
 
 **Analysis (v0 vs v1 Engine Architecture):**
-The historical "Scenario A" run achieved ~8,000 tok/s on a single node because it utilized vLLM's experimental `v1` architecture, which features a highly aggressive Block-Level memory manager. However, to achieve cross-node stability for a 1T MoE model at `TP=8` in later milestones, the system was reverted to the stable `v0` engine (`VLLM_USE_V1=0`). 
+The historical "Scenario A" run achieved ~8,000 tok/s on a single node because it utilized vLLM's `v1` architecture, which features a highly aggressive Block-Level memory manager. However, to achieve cross-node stability for a 1T MoE model at `TP=8` in later milestones, the system was reverted to the stable `v0` engine (`VLLM_USE_V1=0`). 
 
 Re-validation confirmed that for the stable `v0` engine, 40 unique 10k prefixes exceed the KV-cache capacity of a single node. This causes the node to "thrash" its cache, dropping performance down to cold-start levels (~4.4k tok/s). 
 

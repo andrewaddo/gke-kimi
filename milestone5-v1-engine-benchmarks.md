@@ -1,7 +1,7 @@
-# Milestone 5: vLLM v1 Engine Experimental Benchmarks
+# Milestone 5: vLLM v1 Engine Benchmarks
 
 ## 1. Objective
-Re-run the three distinct Kimi K2.5 production workloads (Chat, Reasoning, Agentic) established in Milestone 4, but this time leveraging the experimental **vLLM v1 engine architecture**. The goal is to measure the performance delta (throughput, latency, cache hit rate) provided by v1's "Zero-Overhead" Block-Level memory manager against the stable v0 baseline, while validating if the v1 engine can sustain stability on the cluster under these controlled load thresholds.
+Re-run the three distinct Kimi K2.5 production workloads (Chat, Reasoning, Agentic) established in Milestone 4, but this time leveraging the now-default **vLLM v1 engine architecture**. The goal is to measure the performance delta (throughput, latency, cache hit rate) provided by v1's "Zero-Overhead" Block-Level memory manager against the deprecated v0 baseline, while validating if the v1 engine can sustain stability on the cluster under these controlled load thresholds.
 
 ## 2. Infrastructure Setup
 The cluster utilizes the unified `kimi-k25-vllm` pool behind the GKE Inference Gateway. 
@@ -12,7 +12,7 @@ The cluster utilizes the unified `kimi-k25-vllm` pool behind the GKE Inference G
 
 ## 3. Benchmark Execution & Results
 
-After successfully scaling the cluster to the full **4-node Blackwell architecture (32 GPUs, 3,072GB VRAM)**, we encountered a critical architectural limitation of the `v1` engine: it failed completely (HTTP 503/400) when deployed as a standard multi-node distributed deployment. The `v1` engine's experimental "Zero-Overhead" shared-memory manager (`shm_broadcast`) breaks down over standard Ethernet networks across nodes.
+After successfully scaling the cluster to the full **4-node Blackwell architecture (32 GPUs, 3,072GB VRAM)**, we encountered a critical architectural limitation of the `v1` engine: it failed completely (HTTP 503/400) when deployed as a standard multi-node distributed deployment. The `v1` engine's "Zero-Overhead" shared-memory manager (`shm_broadcast`) breaks down over standard Ethernet networks across nodes.
 
 To resolve this, we restructured the deployment into an **"Island Architecture"** using strict `podAntiAffinity` to ensure exactly 1 pod per node, isolating each `v1` engine to its own 8 local GPUs connected by NVLink, with the GKE Gateway acting as the traffic distributor.
 

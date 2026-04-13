@@ -77,12 +77,12 @@ This deployment is heavily tuned to extract maximum tokens-per-second (TPS) from
 ### A. Environment Variables
 *   `ENABLE_NVFP4_SM120="1"`: **Crucial.** Enables hardware-accelerated 4-bit floating-point (FP4) math natively on Blackwell (SM120) Tensor Cores.
 *   `VLLM_ATTENTION_BACKEND="FLASHINFER"`: Forces vLLM to use FlashInfer, which provides highly optimized attention kernels specifically tuned for modern NVIDIA architectures.
-*   `VLLM_USE_V1="0"`: **Production Stability.** Forces the use of the stable `v0` engine. While vLLM's experimental `v1` engine architecture boasts a highly aggressive "zero-overhead" Block-Level memory manager (which achieves incredible throughput for smaller workloads), it currently suffers from internal GPU-to-GPU communication timeouts (`RuntimeError: cancelled` in `shm_broadcast`) when coordinating a massive 1-Trillion parameter MoE model across the 8 GPUs of a single node under heavy concurrent load. We use `v0` for rock-solid intra-node stability, relying on the GKE Inference Gateway to optimize cache performance across the cluster instead.
+*   `VLLM_USE_V1="0"`: **Legacy Stability.** Forces the use of the deprecated `v0` engine. While vLLM's default `v1` engine architecture boasts a highly aggressive "zero-overhead" Block-Level memory manager (which achieves incredible throughput for smaller workloads), it currently suffers from internal GPU-to-GPU communication timeouts (`RuntimeError: cancelled` in `shm_broadcast`) when coordinating a massive 1-Trillion parameter MoE model across the 8 GPUs of a single node under heavy concurrent load. We used `v0` for rock-solid intra-node stability in earlier testing, relying on the GKE Inference Gateway to optimize cache performance across the cluster instead.
 
 ### B. vLLM Server Arguments (`api_server.py`)
 *   `--model /models`: The path to the NVIDIA-optimized NVFP4 weights.
 *   `--tensor-parallel-size 8`: Distributes the model tensors across all 8 GPUs on the single node. We **do not** use Pipeline Parallelism (PP) here because the 768GB aggregate VRAM is sufficient to hold the entire model on one node, avoiding slow PCIe inter-node latency.
-*   `--enable-expert-parallel`: **Crucial for MoE.** Instead of slicing every tensor across all GPUs (Tensor Parallelism), EP places entire "experts" on specific GPUs. This drastically reduces the inter-GPU communication overhead over the PCIe bus. *(Note: Expert Parallelism is a major feature of both the `v0` and experimental `v1` engines, but it is much more stable in `v0` for models of this immense size).*
+*   `--enable-expert-parallel`: **Crucial for MoE.** Instead of slicing every tensor across all GPUs (Tensor Parallelism), EP places entire "experts" on specific GPUs. This drastically reduces the inter-GPU communication overhead over the PCIe bus. *(Note: Expert Parallelism is a major feature of both the `v0` and `v1` engines, but it was much more reliable in `v0` for models of this immense size).*
 *   `--compilation_config.pass_config.fuse_allreduce_rms true`: A performance optimization that fuses the AllReduce communication step with the subsequent RMSNorm operation into a single GPU kernel, significantly reducing memory bandwidth pressure.
 *   `--mm-encoder-tp-mode data`: Runs the small (~400M) vision encoder in Data Parallel mode rather than slicing it via Tensor Parallelism, preventing unnecessary PCIe communication bottlenecks for multimodal inputs.
 *   `--enable-prefix-caching`: **The key to 1.5M TPM.** Enables KV-cache reuse. If multiple requests share the same system prompt or large codebase prefix, vLLM skips the expensive "prefill" compute phase for those tokens.
@@ -439,9 +439,9 @@ We executed the three production workloads against the entire 4-node cluster (32
 *   **Reasoning Limits:** Generating 4k output tokens takes 4 minutes, causing standard Load Balancer TCP timeouts. By capping output to 1k tokens and 5 RPS, the cluster stabilized and achieved **5,360 tok/s**.
 *   **Agentic Limits:** The Kimi K2.5 model has a hardcoded limit of `65,536` tokens. When pushing 128k prefixes, the model rejects it. Limiting the test to the maximum native 60k boundary achieved a massive **17,338 tok/s** as the Gateway perfectly cached the massive payloads.
 
-## Milestone 5: vLLM v1 Engine Experimental Benchmarks
+## Milestone 5: vLLM v1 Engine Benchmarks
 
-We evaluated the experimental **vLLM v1 engine architecture** against the stable `v0` engine to measure the performance delta of its "Zero-Overhead" Block-Level memory manager.
+We evaluated the now-default **vLLM v1 engine architecture** against the deprecated `v0` engine to measure the performance delta of its "Zero-Overhead" Block-Level memory manager.
 
 *   **The Network Broadcast Limitation:** We discovered that the `v1` architecture's shared-memory manager (`shm_broadcast`) crashes completely over standard Ethernet when attempting to coordinate memory across multiple 8-GPU nodes, resulting in `503` and `400` errors for massive synthetic payloads.
 *   **The "Island Architecture" Solution:** By configuring strict `podAntiAffinity` to ensure 1 Pod per Node, we completely isolated the `v1` engines from each other (relying exclusively on NVLink) and used the GKE Gateway to route traffic.
@@ -455,4 +455,4 @@ For comprehensive technical breakdowns of the benchmarking scenarios executed on
 *   [Milestone 1 & 2: Single Node & Baseline Gateway Performance](benchmark.md)
 *   [Milestone 3: Kimi API Best Practices & Streaming Load Tests](milestone3-full-benchmarks.md)
 *   [Milestone 4: Full-Cluster Stress Tests & Boundary Limits](milestone4-full-cluster-benchmarks.md)
-*   [Milestone 5: vLLM v1 Engine Experimental Tests](milestone5-v1-engine-benchmarks.md)
+*   [Milestone 5: vLLM v1 Engine Tests](milestone5-v1-engine-benchmarks.md)
