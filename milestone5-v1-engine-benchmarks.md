@@ -1,7 +1,7 @@
 # Milestone 5: vLLM v1 Engine Benchmarks
 
 ## 1. Objective
-Re-run the three distinct Kimi K2.5 production workloads (Chat, Reasoning, Agentic) established in Milestone 4, but this time leveraging the now-default **vLLM v1 engine architecture**. The goal is to measure the performance delta (throughput, latency, cache hit rate) provided by v1's "Zero-Overhead" Block-Level memory manager against the deprecated v0 baseline, while validating if the v1 engine can sustain stability on the cluster under these controlled load thresholds.
+Re-run the three distinct Kimi K2.5 production workloads (Chat, Reasoning, Agentic) established in Milestone 4, but this time leveraging the now-default **vLLM v1 engine architecture**. The goal is to measure the performance delta (throughput, latency, cache hit rate) provided by v1's "Zero-Overhead" Block-Level memory manager against the legacy v0 baseline (which was previously required for multi-node stability), while validating if the v1 engine can sustain stability on the cluster under these controlled load thresholds.
 
 ## 2. Infrastructure Setup
 The cluster utilizes the unified `kimi-k25-vllm` pool behind the GKE Inference Gateway. 

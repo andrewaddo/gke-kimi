@@ -32,7 +32,7 @@ python3 -m vllm.entrypoints.openai.api_server \
 ### Key Environment Variables
 *   `ENABLE_NVFP4_SM120=1`: Enables hardware-accelerated 4-bit floating-point (FP4) operations native to Blackwell (SM120) GPUs.
 *   `VLLM_ATTENTION_BACKEND=FLASHINFER`: Selects FlashInfer as the highly optimized attention backend.
-*   `VLLM_USE_V1=0`: Forces the use of the deprecated v0 vLLM engine, bypassing v1 features (not recommended).
+*   `VLLM_USE_V1=0`: Forces the use of the legacy v0 vLLM engine. While v1 is the default for single-node, bypassing v1 features was historically necessary here to establish a multi-node stable baseline before we implemented the Island Architecture.
 
 ---
 
@@ -76,9 +76,9 @@ The following tables synthesize the results of multiple benchmark runs, isolatin
 | **Hit Rate (Estimated)** | 0% | < 5% | High |
 
 **Analysis (v0 vs v1 Engine Architecture):**
-The historical "Scenario A" run achieved ~8,000 tok/s on a single node because it utilized vLLM's `v1` architecture, which features a highly aggressive Block-Level memory manager. However, to achieve cross-node stability for a 1T MoE model at `TP=8` in later milestones, the system was reverted to the stable `v0` engine (`VLLM_USE_V1=0`). 
+The historical "Scenario A" run achieved ~8,000 tok/s on a single node because it utilized vLLM's `v1` architecture, which features a highly aggressive Block-Level memory manager. However, because `v1` suffers from `shm_broadcast` failures over Ethernet, the system was temporarily reverted to the legacy `v0` engine (`VLLM_USE_V1=0`) to achieve cross-node stability for a 1T MoE model at `TP=8` during these baseline milestones.
 
-Re-validation confirmed that for the stable `v0` engine, 40 unique 10k prefixes exceed the KV-cache capacity of a single node. This causes the node to "thrash" its cache, dropping performance down to cold-start levels (~4.4k tok/s). 
+Re-validation confirmed that for the legacy `v0` engine, 40 unique 10k prefixes exceed the KV-cache capacity of a single node. This causes the node to "thrash" its cache, dropping performance down to cold-start levels (~4.4k tok/s). 
 
 #### 2. Cluster Scale & Routing Optimization (3 Nodes)
 To solve the single-node VRAM bottleneck, the workload (40 prefixes) was distributed across 3 nodes.

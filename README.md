@@ -77,7 +77,7 @@ This deployment is heavily tuned to extract maximum tokens-per-second (TPS) from
 ### A. Environment Variables
 *   `ENABLE_NVFP4_SM120="1"`: **Crucial.** Enables hardware-accelerated 4-bit floating-point (FP4) math natively on Blackwell (SM120) Tensor Cores.
 *   `VLLM_ATTENTION_BACKEND="FLASHINFER"`: Forces vLLM to use FlashInfer, which provides highly optimized attention kernels specifically tuned for modern NVIDIA architectures.
-*   `VLLM_USE_V1="0"`: **Legacy Stability.** Forces the use of the deprecated `v0` engine. While vLLM's default `v1` engine architecture boasts a highly aggressive "zero-overhead" Block-Level memory manager (which achieves incredible throughput for smaller workloads), it currently suffers from internal GPU-to-GPU communication timeouts (`RuntimeError: cancelled` in `shm_broadcast`) when coordinating a massive 1-Trillion parameter MoE model across the 8 GPUs of a single node under heavy concurrent load. We used `v0` for rock-solid intra-node stability in earlier testing, relying on the GKE Inference Gateway to optimize cache performance across the cluster instead.
+*   `VLLM_USE_V1="0"`: **Multi-Node Stability Fallback.** Forces the use of the legacy `v0` engine. While vLLM's `v1` engine is the high-performance default for single-node execution, its `shm_broadcast` mechanism remains highly unstable for multi-node distributed execution over Ethernet. We used `v0` (despite its deprecation) for rock-solid distributed stability in our baseline cluster tests, before switching to our "Island Architecture" to safely unlock `v1`.
 
 ### B. vLLM Server Arguments (`api_server.py`)
 *   `--model /models`: The path to the NVIDIA-optimized NVFP4 weights.
@@ -441,7 +441,7 @@ We executed the three production workloads against the entire 4-node cluster (32
 
 ## Milestone 5: vLLM v1 Engine Benchmarks
 
-We evaluated the now-default **vLLM v1 engine architecture** against the deprecated `v0` engine to measure the performance delta of its "Zero-Overhead" Block-Level memory manager.
+We evaluated the high-performance **vLLM v1 engine architecture** against the legacy `v0` engine. While `v1` is the mature default for single-node deployments, its multi-node networking remains unstable, requiring our custom "Island Architecture" workaround to use it reliably across the cluster.
 
 *   **The Network Broadcast Limitation:** We discovered that the `v1` architecture's shared-memory manager (`shm_broadcast`) crashes completely over standard Ethernet when attempting to coordinate memory across multiple 8-GPU nodes, resulting in `503` and `400` errors for massive synthetic payloads.
 *   **The "Island Architecture" Solution:** By configuring strict `podAntiAffinity` to ensure 1 Pod per Node, we completely isolated the `v1` engines from each other (relying exclusively on NVLink) and used the GKE Gateway to route traffic.
