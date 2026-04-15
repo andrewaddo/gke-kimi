@@ -445,7 +445,7 @@ We evaluated the high-performance **vLLM v1 engine architecture** against the le
 
 *   **The Network Broadcast Limitation:** We discovered that the `v1` architecture's shared-memory manager (`shm_broadcast`) crashes completely over standard Ethernet when attempting to coordinate memory across multiple 8-GPU nodes, resulting in `503` and `400` errors for massive synthetic payloads.
 *   **The "Island Architecture" Solution:** By configuring strict `podAntiAffinity` to ensure 1 Pod per Node, we completely isolated the `v1` engines from each other (relying exclusively on NVLink) and used the GKE Gateway to route traffic.
-*   **Performance:** In Island Mode, the `v1` engine flawlessly processed massive synthetic payloads with zero failures, achieving an astounding **14,606 tok/s** and a perfectly stable **87ms TPOT**.
+*   **Performance:** In Island Mode, the `v1` engine flawlessly processed massive synthetic payloads. During a 5,000-request maximum stress test, the fully warmed-up cluster achieved an astounding **49,240.16 tok/s** total throughput with a blazing fast **309ms Median TTFT** and a stable **72ms TPOT**.
 *   **Conclusion:** The `v1` engine (`VLLM_USE_V1=1`) is highly capable for massive 1T MoE models, but **only** if deployed in complete node isolation ("Island Architecture") with the GKE Gateway handling all inter-node traffic distribution.
 
 ---
